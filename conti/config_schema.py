@@ -18,7 +18,7 @@ def _merge_dataclass(cls: type[T], overrides: dict[str, Any]) -> T:
 
 @dataclass
 class ModelConfig:
-    name_or_path: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    name_or_path: str = "meta-llama/Llama-3.1-8B-Instruct"
     torch_dtype: str = "bfloat16"
     trust_remote_code: bool = True
     use_lora: bool = True

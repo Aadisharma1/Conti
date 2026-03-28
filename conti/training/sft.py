@@ -40,23 +40,32 @@ class SFTTrainer:
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[
             mc.torch_dtype
         ]
-        tokenizer = AutoTokenizer.from_pretrained(mc.name_or_path, trust_remote_code=mc.trust_remote_code)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(mc.name_or_path, trust_remote_code=mc.trust_remote_code)
+        except Exception as e:
+            print(f"[ERROR] Failed to load tokenizer for {mc.name_or_path}. Did you really forget to pip install transformers?? daymmmmmm Err: {e}")
+            raise
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(
-            mc.name_or_path,
-            torch_dtype=dtype,
-            trust_remote_code=mc.trust_remote_code,
-            device_map=None,
-            attn_implementation=mc.attn_implementation,
-        )
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                mc.name_or_path,
+                torch_dtype=dtype,
+                trust_remote_code=mc.trust_remote_code,
+                device_map=None,
+                attn_implementation=mc.attn_implementation,
+            )
+        except Exception as e:
+            print(f"[ERROR] model load failed for {mc.name_or_path}. check HF_TOKEN is set and you have disk space. Err: {e}")
+            raise
 
         # memory bach jaati hai isse, thoda slow hota hai but worth it
         if mc.gradient_checkpointing:
             model.gradient_checkpointing_enable()
 
         if mc.use_lora:
+            # TODO: honestly not sure rank 16 is doing anything better than 8, need to ablate this
             lora = LoraConfig(
                 r=mc.lora_r,
                 lora_alpha=mc.lora_alpha,

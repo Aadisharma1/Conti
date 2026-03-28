@@ -12,15 +12,15 @@ from accelerate.utils import broadcast_object_list
 from tqdm import tqdm
 
 from conti.config_schema import ContiConfig
-from conti.data.loaders import load_math_prompts
 from conti.eval.drift import DriftTracker
 from conti.eval.metrics import eval_math_pass1, eval_safety_asr_proxy, eval_safety_multi_benchmark
 from conti.logging import ExperimentLogger
 from conti.replay.buffer import SafetyReplayBuffer
 from conti.reproducibility import RunManifest, build_manifest, set_global_seed
-from conti.training.format import build_supervised_example, replay_item_to_text, user_prompt_only
 from conti.training.sft import SFTTrainer
 from conti.verifier.keyword import KeywordVerifier, CompositeVerifier
+# pulling helpers from utils instead of navigating 5 nested folders
+from utils import load_math_prompts, build_supervised_example, replay_item_to_text, user_prompt_only
 
 
 def _broadcast_texts(accelerator, texts: list[str] | None) -> list[str]:
@@ -40,6 +40,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _extract_num(text: str) -> str | None:
     nums = re.findall(r"[-+]?\d*\.?\d+", text.replace(",", ""))
+    # print(f"DEBUG: extracted num {nums[-1] if nums else None}")  # sanity check during eval
     return nums[-1] if nums else None
 
 
@@ -75,6 +76,7 @@ def _gen_batch(model, tokenizer, questions, max_new_tokens, device, temp, top_p)
     texts = [user_prompt_only(tokenizer, q) for q in questions]
     max_in = min(2048, getattr(tokenizer, "model_max_length", 2048) or 2048)
     enc = tokenizer(texts, padding=True, return_tensors="pt", truncation=True, max_length=max_in)
+    # print(enc["input_ids"].shape)  # taking up too much VRAM? check this
     enc = {k: v.to(device) for k, v in enc.items()}
     out = model.generate(
         **enc,

@@ -36,7 +36,8 @@ class KeywordVerifier:
 
 
 class CompositeVerifier:
-    """keyword first then model if configured. keyword is fast so run that first."""
+    # NOTE: we running on hopes and vibes rn 
+    # TODO: the scorer_threshold=0.5 is just vibes, should tune this on a held-out set
 
     def __init__(self, cfg: VerifierConfig):
         self._keyword = KeywordVerifier(cfg)

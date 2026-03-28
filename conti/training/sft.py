@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Any
+
+import torch
+from accelerate import Accelerator
+from peft import LoraConfig, TaskType, get_peft_model
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoTokenizer, get_linear_schedule_with_warmup
+
+from conti.config_schema import ContiConfig
+
+
+class _TextDS(Dataset):
+    def __init__(self, texts: list[str]):
+        self.texts = texts
+
+    def __len__(self) -> int:
+        return len(self.texts)
+
+    def __getitem__(self, i: int) -> dict[str, Any]:
+        return {"text": self.texts[i]}
+
+
+@dataclass
+class SFTTrainer:
+    cfg: ContiConfig
+    accelerator: Accelerator
+    _prepared: Any | None = None
+    _ewc: Any | None = None
+
+    def set_ewc(self, ewc_penalty) -> None:
+        self._ewc = ewc_penalty
+
+    def load_model_tokenizer(self):
+        mc = self.cfg.model
+        dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[
+            mc.torch_dtype
+        ]
+        tokenizer = AutoTokenizer.from_pretrained(mc.name_or_path, trust_remote_code=mc.trust_remote_code)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(
+            mc.name_or_path,
+            torch_dtype=dtype,
+            trust_remote_code=mc.trust_remote_code,
+            device_map=None,
+            attn_implementation=mc.attn_implementation,
+        )
+
+        # memory bach jaati hai isse, thoda slow hota hai but worth it
+        if mc.gradient_checkpointing:
+            model.gradient_checkpointing_enable()
+
+        if mc.use_lora:
+            lora = LoraConfig(
+                r=mc.lora_r,
+                lora_alpha=mc.lora_alpha,
+                lora_dropout=mc.lora_dropout,
+                task_type=TaskType.CAUSAL_LM,
+                target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            )
+            model = get_peft_model(model, lora)
+
+        return model, tokenizer
+
+    def ensure_model_prepared(self, model):
+        if self._prepared is None:
+            self._prepared = self.accelerator.prepare(model)
+        return self._prepared
+
+    def train_on_texts(
+        self,
+        model,
+        tokenizer,
+        texts: list[str],
+        learning_rate: float,
+        num_epochs: int,
+        micro_batch_size: int,
+        warmup_ratio: float,
+        weight_decay: float,
+        max_seq_length: int,
+        max_grad_norm: float,
+    ) -> dict[str, list[float]]:
+        if not texts:
+            return {"loss": [], "ewc_penalty": []}
+
+        model = self.ensure_model_prepared(model)
+        ds = _TextDS(texts)
+        dl = DataLoader(ds, batch_size=micro_batch_size, shuffle=True, drop_last=False)
+
+        opt = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        opt, dl = self.accelerator.prepare(opt, dl)
+
+        ga = max(1, self.accelerator.gradient_accumulation_steps)
+        updates_per_epoch = max(1, math.ceil(len(dl) / ga))
+        total_steps = max(1, num_epochs * updates_per_epoch)
+        warmup = int(total_steps * warmup_ratio)
+        sched = get_linear_schedule_with_warmup(opt, warmup, total_steps)
+        sched = self.accelerator.prepare(sched)
+
+        losses: list[float] = []
+        ewc_pens: list[float] = []
+
+        model.train()
+        for ep in range(num_epochs):
+            self.accelerator.wait_for_everyone()
+            pbar = tqdm(dl, disable=not self.accelerator.is_local_main_process, desc=f"ep{ep}")
+            opt.zero_grad(set_to_none=True)
+
+            for batch in pbar:
+                with self.accelerator.accumulate(model):
+                    enc = tokenizer(
+                        list(batch["text"]),
+                        padding=True,
+                        truncation=True,
+                        max_length=max_seq_length,
+                        return_tensors="pt",
+                    )
+                    enc = {k: v.to(self.accelerator.device) for k, v in enc.items()}
+                    out = model(**enc, labels=enc["input_ids"])
+                    loss = out.loss
+
+                    ewc_p = 0.0
+                    if self._ewc is not None and self._ewc.is_ready:
+                        ewc_loss = self._ewc.penalty(model)
+                        loss = loss + ewc_loss
+                        ewc_p = float(ewc_loss.detach())
+
+                    self.accelerator.backward(loss)
+
+                    if self.accelerator.sync_gradients:
+                        self.accelerator.clip_grad_norm_(model.parameters(), max_grad_norm)
+                        opt.step()
+                        sched.step()
+                        opt.zero_grad(set_to_none=True)
+
+                    if self.accelerator.is_local_main_process:  # sirf main process log kare
+                        l = float(loss.detach())
+                        losses.append(l)
+                        ewc_pens.append(ewc_p)
+                        pbar.set_postfix(loss=f"{l:.4f}", ewc=f"{ewc_p:.4f}")
+
+        self.accelerator.wait_for_everyone()
+        return {"loss": losses, "ewc_penalty": ewc_pens}
+
+    def save_pretrained(self, model, tokenizer, path: str) -> None:
+        unwrapped = self.accelerator.unwrap_model(model)
+        if self.accelerator.is_main_process:
+            unwrapped.save_pretrained(path)
+            tokenizer.save_pretrained(path)
+        self.accelerator.wait_for_everyone()

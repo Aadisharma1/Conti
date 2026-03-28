@@ -1,0 +1,62 @@
+# smoke test config — tiny model for CI / CPU runs
+# no llama weights needed, just uses gpt2
+seed: 17
+output_dir: ./outputs/smoke_gpt2
+
+model:
+  name_or_path: gpt2
+  torch_dtype: float32
+  trust_remote_code: false
+  use_lora: false
+  max_seq_length: 256
+  gradient_checkpointing: false
+  attn_implementation: null
+
+verifier:
+  mode: keyword
+  block_patterns:
+    - "\\b(bomb|weapon)\\b"
+  case_insensitive: true
+  scorer_model: null
+  scorer_threshold: 0.75
+
+replay:
+  enabled: true
+  safety_samples_per_batch: 1
+  dataset_path: null
+
+ewc:
+  enabled: false
+  lambda_ewc: 1000.0
+  fisher_samples: 10
+
+logging:
+  use_wandb: false
+  wandb_project: conti-safety-smoke
+  log_every_n_steps: 5
+
+loop:
+  experiment: phase1_verifier
+  num_self_improve_rounds: 1
+  generate_batch_size: 2
+  train_micro_batch_size: 1
+  gradient_accumulation_steps: 2
+  learning_rate: 5.0e-5
+  num_epochs_per_round: 1
+  max_train_samples_per_round: 8
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  generation_temperature: 0.7
+  generation_top_p: 0.95
+  generation_max_new_tokens: 96
+  eval_every_round: true
+  require_correct_trajectory: true
+  max_grad_norm: 1.0
+
+data:
+  math_dataset: gsm8k
+  math_split: train
+  math_test_split: test
+  safety_eval_datasets:
+    - advbench_subset
+  max_prompts_per_eval: 4

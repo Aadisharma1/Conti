@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "conti-safety"
+version = "0.1.0"
+description = "Continual learning safety verifier for self-improving LLMs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0",
+    "transformers>=4.38.0",
+    "accelerate>=0.27.0",
+    "datasets>=2.16.0",
+    "peft>=0.10.0",
+    "safetensors>=0.4.0",
+    "pyyaml>=6.0.1",
+    "tqdm>=4.66.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "ruff>=0.3.0"]
+viz = ["matplotlib>=3.8.0"]
+wandb = ["wandb>=0.16.0"]
+all = ["pytest>=8.0.0", "ruff>=0.3.0", "matplotlib>=3.8.0", "wandb>=0.16.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["conti*"]
+
+[tool.setuptools.package-data]
+"conti.data" = ["*.jsonl"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

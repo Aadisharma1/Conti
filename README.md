@@ -147,16 +147,5 @@ Protocol details for collaborators in `docs/RESEARCH_PROTOCOL.md`.
 
 ---
 
-## Notes to self / TODOs
 
-- [x] get AdvBench subset working locally
-- [x] check that EWC penalty doesn't make training loss explode (it doesn't, but adds ~30% slowdown)
-- [x] fix the `broadcast_object_list` crash on single-GPU -- was a version thing, pinned accelerate
-- [ ] try Flash Attention 2 (OOMing on A100 right now with the full 8B, no idea why, 4090 is fine)
-- [ ] multi-node run broken -- NCCL timeout after round 1, haven't debugged yet
-- [ ] actually compute Fisher matrix on the safety data not just a diagonal approx. the current EWC is technically wrong
-- [ ] the `donotanswer_subset.jsonl` only has 15 prompts which is embarrassingly small, need to pull the real dataset
-- [ ] XSTEST over-refusal tracking -- right now we only track harmful ASR, need to add benign refusal rate too or the metric is incomplete
-- [ ] wandb run grouping is broken when seeds > 3, something with the run name collision
-- [ ] look into whether LoRA rank 16 is actually doing anything -- rank 8 was just as good last time and way faster
 

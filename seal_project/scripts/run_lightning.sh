@@ -7,6 +7,7 @@
 set -e
 
 export GROQ_API_KEY="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"
+export HF_TOKEN="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"
 
 # ─── CONFIG ─────────────────────────────────────────────────
 MODEL_1="Qwen/Qwen2.5-7B-Instruct"

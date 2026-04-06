@@ -108,6 +108,7 @@ run_model_pipeline() {
     python src/train_ewc.py \
         --base-model $MODEL \
         --train-data $DATA_DIR/gsm8k_edits.jsonl \
+        --adapter-path $CKPT_DIR/${MODEL_SHORT}_continual_step1 \
         --output-dir $CKPT_DIR/${MODEL_SHORT}_continual_step2 \
         --epochs $TRAIN_EPOCHS \
         --batch-size $BATCH_SIZE \
@@ -146,6 +147,7 @@ run_model_pipeline() {
         --base-model $MODEL \
         --train-data $DATA_DIR/gsm8k_edits.jsonl \
         --fisher-data $SAFETY_DATA \
+        --adapter-path $CKPT_DIR/${MODEL_SHORT}_ewc_step1 \
         --output-dir $CKPT_DIR/${MODEL_SHORT}_ewc_step2 \
         --epochs $TRAIN_EPOCHS \
         --batch-size $BATCH_SIZE \
@@ -189,6 +191,7 @@ run_model_pipeline() {
         --train-data $DATA_DIR/gsm8k_edits.jsonl \
         --fisher-data $SAFETY_DATA \
         --replay-data $SAFETY_DATA \
+        --adapter-path $CKPT_DIR/${MODEL_SHORT}_replay_step1 \
         --output-dir $CKPT_DIR/${MODEL_SHORT}_replay_step2 \
         --epochs $TRAIN_EPOCHS \
         --batch-size $BATCH_SIZE \

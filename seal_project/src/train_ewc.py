@@ -336,6 +336,8 @@ def main():
                         help="EWC penalty weight. 0 = no EWC (naive SFT)")
     parser.add_argument("--fisher-samples", type=int, default=200,
                         help="number of batches for Fisher computation")
+    parser.add_argument("--adapter-path", type=str, default=None,
+                        help="path to existing LoRA adapter to continue training")
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--max-length", type=int, default=1024)
@@ -356,17 +358,24 @@ def main():
         trust_remote_code=True,
     )
 
-    # wrap in LoRA
-    lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=0.05,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj",
-                         "gate_proj", "up_proj", "down_proj"],
-        bias="none",
-    )
-    model = get_peft_model(model, lora_config)
+    if args.adapter_path:
+        # Load existing adapter and continue training
+        from peft import PeftModel
+        print(f"  [Resume] Loading existing LoRA adapter from {args.adapter_path}")
+        model = PeftModel.from_pretrained(model, args.adapter_path, is_trainable=True)
+    else:
+        # wrap in fresh LoRA
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj",
+                             "gate_proj", "up_proj", "down_proj"],
+            bias="none",
+        )
+        model = get_peft_model(model, lora_config)
+    
     model.print_trainable_parameters()
 
     # load datasets

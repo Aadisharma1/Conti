@@ -15,3 +15,13 @@ wandb/
 .env
 *.log
 .DS_Store
+
+# SEAL project
+.venv/
+results/
+data/
+seal_project/.venv/
+seal_project/results/
+seal_project/data/
+seal_project/checkpoints/
+

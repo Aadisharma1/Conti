@@ -1,0 +1,215 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────
+# SEAL Continual Learning — Full Pipeline for Lightning.ai A100
+# Split by MODEL, not by dataset. Load once, run everything.
+# ─────────────────────────────────────────────────────────────
+
+set -e
+
+export GROQ_API_KEY="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"
+
+# ─── CONFIG ─────────────────────────────────────────────────
+MODEL_1="Qwen/Qwen2.5-7B-Instruct"
+MODEL_2="meta-llama/Meta-Llama-3.1-8B-Instruct"
+RESULTS_DIR="results"
+CKPT_DIR="checkpoints"
+DATA_DIR="data/self_edits"
+
+SQUAD_SAMPLES=200
+GSM8K_SAMPLES=200
+ADVBENCH_SAMPLES=100
+XSTEST_SAMPLES=200
+FISHER_SAMPLES=100
+TRAIN_EPOCHS=3
+LORA_RANK=16
+EWC_LAMBDA=0.5
+BATCH_SIZE=4
+LR=2e-5
+
+mkdir -p $RESULTS_DIR $CKPT_DIR $DATA_DIR
+
+# ─── STEP 0: Generate self-edit data via Groq ──────────────
+echo "============================================"
+echo "  Step 0: Generating self-edit trajectories"
+echo "============================================"
+
+python src/groq_generator.py \
+    --output-dir $DATA_DIR \
+    --squad-samples $SQUAD_SAMPLES \
+    --gsm8k-samples $GSM8K_SAMPLES \
+    --dataset both
+
+# ─── FUNCTION: Run full pipeline for one model ─────────────
+run_model_pipeline() {
+    local MODEL=$1
+    local MODEL_SHORT=$2
+
+    echo ""
+    echo "============================================"
+    echo "  Running pipeline for: $MODEL_SHORT"
+    echo "============================================"
+
+    # ── Arm 1: Baseline Frozen ──────────────────────────────
+    echo "--- Arm 1: baseline_frozen ---"
+    python src/eval.py \
+        --base-model $MODEL \
+        --arm-name "${MODEL_SHORT}_baseline_frozen" \
+        --output $RESULTS_DIR/eval_results.json \
+        --squad-samples $SQUAD_SAMPLES \
+        --gsm8k-samples $GSM8K_SAMPLES \
+        --advbench-samples $ADVBENCH_SAMPLES \
+        --xstest-samples $XSTEST_SAMPLES
+
+    # ── Arm 2: Single SFT on SQuAD (no EWC) ────────────────
+    echo "--- Arm 2: baseline_single_sft (SQuAD) ---"
+    python src/train_ewc.py \
+        --base-model $MODEL \
+        --train-data $DATA_DIR/squad_edits.jsonl \
+        --output-dir $CKPT_DIR/${MODEL_SHORT}_squad_naive \
+        --epochs 1 \
+        --batch-size $BATCH_SIZE \
+        --lr $LR \
+        --ewc-lambda 0.0 \
+        --lora-rank $LORA_RANK
+
+    python src/eval.py \
+        --base-model $MODEL \
+        --adapter-path $CKPT_DIR/${MODEL_SHORT}_squad_naive \
+        --arm-name "${MODEL_SHORT}_single_sft_squad" \
+        --output $RESULTS_DIR/eval_results.json \
+        --squad-samples $SQUAD_SAMPLES \
+        --gsm8k-samples $GSM8K_SAMPLES \
+        --advbench-samples $ADVBENCH_SAMPLES \
+        --xstest-samples $XSTEST_SAMPLES
+
+    # ── Arm 3: Naive Continual (SQuAD + GSM8K, no EWC) ─────
+    echo "--- Arm 3: naive_continual ---"
+    python src/train_ewc.py \
+        --base-model $MODEL \
+        --train-data $DATA_DIR/squad_edits.jsonl \
+        --output-dir $CKPT_DIR/${MODEL_SHORT}_continual_step1 \
+        --epochs $TRAIN_EPOCHS \
+        --batch-size $BATCH_SIZE \
+        --lr $LR \
+        --ewc-lambda 0.0 \
+        --lora-rank $LORA_RANK
+
+    python src/train_ewc.py \
+        --base-model $MODEL \
+        --train-data $DATA_DIR/gsm8k_edits.jsonl \
+        --output-dir $CKPT_DIR/${MODEL_SHORT}_continual_step2 \
+        --epochs $TRAIN_EPOCHS \
+        --batch-size $BATCH_SIZE \
+        --lr $LR \
+        --ewc-lambda 0.0 \
+        --lora-rank $LORA_RANK
+
+    python src/eval.py \
+        --base-model $MODEL \
+        --adapter-path $CKPT_DIR/${MODEL_SHORT}_continual_step2 \
+        --arm-name "${MODEL_SHORT}_naive_continual" \
+        --output $RESULTS_DIR/eval_results.json \
+        --squad-samples $SQUAD_SAMPLES \
+        --gsm8k-samples $GSM8K_SAMPLES \
+        --advbench-samples $ADVBENCH_SAMPLES \
+        --xstest-samples $XSTEST_SAMPLES
+
+    # ── Arm 4: EWC-only (SQuAD + GSM8K, with EWC) ──────────
+    echo "--- Arm 4: ewc_protected ---"
+    python src/train_ewc.py \
+        --base-model $MODEL \
+        --train-data $DATA_DIR/squad_edits.jsonl \
+        --output-dir $CKPT_DIR/${MODEL_SHORT}_ewc_step1 \
+        --epochs $TRAIN_EPOCHS \
+        --batch-size $BATCH_SIZE \
+        --lr $LR \
+        --ewc-lambda $EWC_LAMBDA \
+        --fisher-samples $FISHER_SAMPLES \
+        --lora-rank $LORA_RANK
+
+    python src/train_ewc.py \
+        --base-model $MODEL \
+        --train-data $DATA_DIR/gsm8k_edits.jsonl \
+        --fisher-data $DATA_DIR/squad_edits.jsonl \
+        --output-dir $CKPT_DIR/${MODEL_SHORT}_ewc_step2 \
+        --epochs $TRAIN_EPOCHS \
+        --batch-size $BATCH_SIZE \
+        --lr $LR \
+        --ewc-lambda $EWC_LAMBDA \
+        --fisher-samples $FISHER_SAMPLES \
+        --lora-rank $LORA_RANK
+
+    python src/eval.py \
+        --base-model $MODEL \
+        --adapter-path $CKPT_DIR/${MODEL_SHORT}_ewc_step2 \
+        --arm-name "${MODEL_SHORT}_ewc_protected" \
+        --output $RESULTS_DIR/eval_results.json \
+        --squad-samples $SQUAD_SAMPLES \
+        --gsm8k-samples $GSM8K_SAMPLES \
+        --advbench-samples $ADVBENCH_SAMPLES \
+        --xstest-samples $XSTEST_SAMPLES
+
+    # ── Arm 5: EWC + Replay Buffer (Ours) ──────────────────
+    echo "--- Arm 5: ewc_plus_replay (Ours) ---"
+    # note: for arm 5, we interleave safety data during training
+    # by using the fisher-data flag with a safety-focused dataset
+    # the replay buffer mixes old alignment data into the training stream
+    python src/train_ewc.py \
+        --base-model $MODEL \
+        --train-data $DATA_DIR/squad_edits.jsonl \
+        --fisher-data $DATA_DIR/squad_edits.jsonl \
+        --output-dir $CKPT_DIR/${MODEL_SHORT}_replay_step1 \
+        --epochs $TRAIN_EPOCHS \
+        --batch-size $BATCH_SIZE \
+        --lr $LR \
+        --ewc-lambda 1.0 \
+        --fisher-samples $FISHER_SAMPLES \
+        --lora-rank $LORA_RANK
+
+    python src/train_ewc.py \
+        --base-model $MODEL \
+        --train-data $DATA_DIR/gsm8k_edits.jsonl \
+        --fisher-data $DATA_DIR/squad_edits.jsonl \
+        --output-dir $CKPT_DIR/${MODEL_SHORT}_replay_step2 \
+        --epochs $TRAIN_EPOCHS \
+        --batch-size $BATCH_SIZE \
+        --lr $LR \
+        --ewc-lambda 1.0 \
+        --fisher-samples $FISHER_SAMPLES \
+        --lora-rank $LORA_RANK
+
+    python src/eval.py \
+        --base-model $MODEL \
+        --adapter-path $CKPT_DIR/${MODEL_SHORT}_replay_step2 \
+        --arm-name "${MODEL_SHORT}_ewc_plus_replay" \
+        --output $RESULTS_DIR/eval_results.json \
+        --squad-samples $SQUAD_SAMPLES \
+        --gsm8k-samples $GSM8K_SAMPLES \
+        --advbench-samples $ADVBENCH_SAMPLES \
+        --xstest-samples $XSTEST_SAMPLES
+
+    echo "  [DONE] $MODEL_SHORT pipeline complete"
+}
+
+# ─── EXECUTE ────────────────────────────────────────────────
+
+# Phase 1: Qwen 7B
+run_model_pipeline "$MODEL_1" "qwen7b"
+
+# Phase 2: Llama 8B
+run_model_pipeline "$MODEL_2" "llama8b"
+
+echo ""
+echo "============================================"
+echo "  ALL DONE. Results in: $RESULTS_DIR/"
+echo "============================================"
+
+python -c "
+import json
+with open('$RESULTS_DIR/eval_results.json') as f:
+    results = json.load(f)
+print(f\"{'Arm':<35} {'SQuAD EM':>10} {'GSM8K':>10} {'AdvBench':>10} {'XSTEST':>10}\")
+print('-'*75)
+for r in results:
+    print(f\"{r['arm']:<35} {r['squad_em']:>10.4f} {r['gsm8k_pass1']:>10.4f} {r['advbench_asr']:>10.4f} {r['xstest_refusal_pct']:>10.4f}\")
+"

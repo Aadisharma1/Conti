@@ -16,6 +16,28 @@ CKPT_DIR="checkpoints"
 DATA_DIR="data/self_edits"
 SAFETY_DATA="$DATA_DIR/safety_anchor.jsonl"
 
+# ─── PRE-FLIGHT CHECKS ──────────────────────────────────────
+echo "============================================"
+echo "  Pre-Flight: Checking Llama 3.1 License Access"
+echo "============================================"
+python -c "
+import sys
+try:
+    from transformers import AutoTokenizer
+    AutoTokenizer.from_pretrained('$MODEL_2')
+    print('  [OK] Successfully authenticated and accessed $MODEL_2')
+except Exception as e:
+    print('\n[ERROR] Failed to access $MODEL_2!')
+    print('This is a gated model. You must do two things before running this script:')
+    print('  1. Go to https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct and accept the usage license.')
+    print('  2. Run \"huggingface-cli login\" in your terminal and paste your HF Token.')
+    sys.exit(1)
+"
+if [ $? -ne 0 ]; then
+    exit 1
+fi
+echo ""
+
 SQUAD_SAMPLES=200
 GSM8K_SAMPLES=200
 ADVBENCH_SAMPLES=100

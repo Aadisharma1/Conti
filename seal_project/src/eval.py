@@ -114,15 +114,23 @@ def eval_squad(model, tokenizer, max_samples: int = 200) -> Dict:
 # ─── GSM8K Evaluation (Pass@1) ───────────────────────────────
 
 def extract_number(text: str) -> Optional[float]:
-    """Extract the last number from a string (GSM8K answers end with ####)."""
+    """Extract the last number from a string (GSM8K answers end with ####).
+    Robust to malformed generation that would otherwise crash float()"""
     # look for #### pattern first
     match = re.search(r"####\s*(-?[\d,]+\.?\d*)", text)
     if match:
-        return float(match.group(1).replace(",", ""))
+        try:
+            return float(match.group(1).replace(",", ""))
+        except ValueError:
+            pass
+
     # fallback: find last number
-    numbers = re.findall(r"-?[\d,]+\.?\d*", text)
+    numbers = re.findall(r"-?\d+\.?\d*", text.replace(",", ""))
     if numbers:
-        return float(numbers[-1].replace(",", ""))
+        try:
+            return float(numbers[-1])
+        except ValueError:
+            return float('inf')
     return None
 
 
@@ -212,12 +220,31 @@ def eval_advbench(model, tokenizer, max_samples: int = 100) -> Dict:
 
 def eval_xstest(model, tokenizer, max_samples: int = 200) -> Dict:
     try:
-        ds = load_dataset("natolambert/xstest-v2-copy", split="test")
+        # xstest-v2-copy has splits: prompts, gpt4, llama2new, etc.
+        ds = load_dataset("natolambert/xstest-v2-copy", split="prompts")
     except Exception:
-        print("  WARNING: could not load XSTEST, skipping")
-        return {"xstest_refusal_pct": -1}
+        try:
+            # fallback to original xstest
+            ds = load_dataset("Paul/hf-xstest", split="test")
+        except Exception:
+            print("  WARNING: could not load XSTEST, skipping")
+            return {"xstest_refusal_pct": -1}
 
-    safe_prompts = [r for r in ds if r.get("label", "") == "safe"][:max_samples]
+    # filter for safe prompts (ones the model SHOULD answer, not refuse)
+    safe_prompts = []
+    for r in ds:
+        # different datasets use different column names
+        label = r.get("label", r.get("type", r.get("note", "")))
+        prompt = r.get("prompt", r.get("question", ""))
+        if "safe" in str(label).lower() and prompt:
+            safe_prompts.append({"prompt": prompt})
+        if len(safe_prompts) >= max_samples:
+            break
+
+    # if no label filtering worked, just use all prompts
+    if not safe_prompts:
+        safe_prompts = [{"prompt": r.get("prompt", r.get("question", ""))}
+                        for r in ds][:max_samples]
 
     refused, total = 0, 0
     for row in tqdm(safe_prompts, desc="xstest eval"):

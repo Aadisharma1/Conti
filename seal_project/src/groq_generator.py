@@ -15,7 +15,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-MODEL = "llama3-70b-8192"
+MODEL = "llama-3.3-70b-versatile"
 MAX_RETRIES = 5
 RETRY_DELAY = 2.0  # seconds, doubles on each retry
 

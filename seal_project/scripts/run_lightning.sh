@@ -14,6 +14,7 @@ MODEL_2="meta-llama/Meta-Llama-3.1-8B-Instruct"
 RESULTS_DIR="results"
 CKPT_DIR="checkpoints"
 DATA_DIR="data/self_edits"
+SAFETY_DATA="$DATA_DIR/safety_anchor.jsonl"
 
 SQUAD_SAMPLES=200
 GSM8K_SAMPLES=200
@@ -28,9 +29,18 @@ LR=2e-5
 
 mkdir -p $RESULTS_DIR $CKPT_DIR $DATA_DIR
 
-# ─── STEP 0: Generate self-edit data via Groq ──────────────
+# ─── STEP 0: Generate data ─────────────────────────────────
 echo "============================================"
-echo "  Step 0: Generating self-edit trajectories"
+echo "  Step 0a: Building safety anchor dataset"
+echo "============================================"
+
+python src/safety_anchor.py \
+    --output $SAFETY_DATA \
+    --n-refusals 50 \
+    --n-helpful 50
+
+echo "============================================"
+echo "  Step 0b: Generating self-edit trajectories"
 echo "============================================"
 
 python src/groq_generator.py \
@@ -60,7 +70,7 @@ run_model_pipeline() {
         --advbench-samples $ADVBENCH_SAMPLES \
         --xstest-samples $XSTEST_SAMPLES
 
-    # ── Arm 2: Single SFT on SQuAD (no EWC) ────────────────
+    # ── Arm 2: Single SFT on SQuAD (no EWC, no replay) ─────
     echo "--- Arm 2: baseline_single_sft (SQuAD) ---"
     python src/train_ewc.py \
         --base-model $MODEL \
@@ -70,7 +80,8 @@ run_model_pipeline() {
         --batch-size $BATCH_SIZE \
         --lr $LR \
         --ewc-lambda 0.0 \
-        --lora-rank $LORA_RANK
+        --lora-rank $LORA_RANK \
+        --verify
 
     python src/eval.py \
         --base-model $MODEL \
@@ -114,30 +125,35 @@ run_model_pipeline() {
         --advbench-samples $ADVBENCH_SAMPLES \
         --xstest-samples $XSTEST_SAMPLES
 
-    # ── Arm 4: EWC-only (SQuAD + GSM8K, with EWC) ──────────
+    # ── Arm 4: EWC-only (Fisher on SAFETY data, not SQuAD) ─
+    #    Fisher anchors the weights that matter for safety behavior
+    #    No replay buffer — just the penalty term
     echo "--- Arm 4: ewc_protected ---"
     python src/train_ewc.py \
         --base-model $MODEL \
         --train-data $DATA_DIR/squad_edits.jsonl \
+        --fisher-data $SAFETY_DATA \
         --output-dir $CKPT_DIR/${MODEL_SHORT}_ewc_step1 \
         --epochs $TRAIN_EPOCHS \
         --batch-size $BATCH_SIZE \
         --lr $LR \
         --ewc-lambda $EWC_LAMBDA \
         --fisher-samples $FISHER_SAMPLES \
-        --lora-rank $LORA_RANK
+        --lora-rank $LORA_RANK \
+        --verify
 
     python src/train_ewc.py \
         --base-model $MODEL \
         --train-data $DATA_DIR/gsm8k_edits.jsonl \
-        --fisher-data $DATA_DIR/squad_edits.jsonl \
+        --fisher-data $SAFETY_DATA \
         --output-dir $CKPT_DIR/${MODEL_SHORT}_ewc_step2 \
         --epochs $TRAIN_EPOCHS \
         --batch-size $BATCH_SIZE \
         --lr $LR \
         --ewc-lambda $EWC_LAMBDA \
         --fisher-samples $FISHER_SAMPLES \
-        --lora-rank $LORA_RANK
+        --lora-rank $LORA_RANK \
+        --verify
 
     python src/eval.py \
         --base-model $MODEL \
@@ -149,34 +165,38 @@ run_model_pipeline() {
         --advbench-samples $ADVBENCH_SAMPLES \
         --xstest-samples $XSTEST_SAMPLES
 
-    # ── Arm 5: EWC + Replay Buffer (Ours) ──────────────────
+    # ── Arm 5: EWC + Replay Buffer (Ours) ───────────────────
+    #    Fisher on safety data (same as Arm 4)
+    #    PLUS: safety_anchor.jsonl mixed INTO the training batches
+    #    via --replay-data so the model sees refusal examples every epoch
     echo "--- Arm 5: ewc_plus_replay (Ours) ---"
-    # note: for arm 5, we interleave safety data during training
-    # by using the fisher-data flag with a safety-focused dataset
-    # the replay buffer mixes old alignment data into the training stream
     python src/train_ewc.py \
         --base-model $MODEL \
         --train-data $DATA_DIR/squad_edits.jsonl \
-        --fisher-data $DATA_DIR/squad_edits.jsonl \
+        --fisher-data $SAFETY_DATA \
+        --replay-data $SAFETY_DATA \
         --output-dir $CKPT_DIR/${MODEL_SHORT}_replay_step1 \
         --epochs $TRAIN_EPOCHS \
         --batch-size $BATCH_SIZE \
         --lr $LR \
         --ewc-lambda 1.0 \
         --fisher-samples $FISHER_SAMPLES \
-        --lora-rank $LORA_RANK
+        --lora-rank $LORA_RANK \
+        --verify
 
     python src/train_ewc.py \
         --base-model $MODEL \
         --train-data $DATA_DIR/gsm8k_edits.jsonl \
-        --fisher-data $DATA_DIR/squad_edits.jsonl \
+        --fisher-data $SAFETY_DATA \
+        --replay-data $SAFETY_DATA \
         --output-dir $CKPT_DIR/${MODEL_SHORT}_replay_step2 \
         --epochs $TRAIN_EPOCHS \
         --batch-size $BATCH_SIZE \
         --lr $LR \
         --ewc-lambda 1.0 \
         --fisher-samples $FISHER_SAMPLES \
-        --lora-rank $LORA_RANK
+        --lora-rank $LORA_RANK \
+        --verify
 
     python src/eval.py \
         --base-model $MODEL \
@@ -193,7 +213,7 @@ run_model_pipeline() {
 
 # ─── EXECUTE ────────────────────────────────────────────────
 
-# Phase 1: Qwen 7B
+# Phase 1: Qwen 7B (stay loaded the whole time)
 run_model_pipeline "$MODEL_1" "qwen7b"
 
 # Phase 2: Llama 8B

@@ -15,7 +15,7 @@ from tqdm import tqdm
 import time
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama-3.1-8b-instant"
 
 
 def call_groq(client, prompt: str, system: str, max_retries=5):

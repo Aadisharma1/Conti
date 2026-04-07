@@ -6,8 +6,21 @@
 
 set -e
 
-export GROQ_API_KEY="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"
-export HF_TOKEN="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"
+echo "============================================"
+echo "  SEAL Pipeline — API Key Setup"
+echo "============================================"
+echo ""
+read -p "Enter your GROQ API Key: " GROQ_KEY
+read -p "Enter your HuggingFace Token: " HF_KEY
+echo ""
+
+export GROQ_API_KEY="$GROQ_KEY"
+export HF_TOKEN="$HF_KEY"
+
+if [ -z "$GROQ_API_KEY" ] || [ -z "$HF_TOKEN" ]; then
+    echo "[ERROR] Both keys are required. Exiting."
+    exit 1
+fi
 
 # ─── CONFIG ─────────────────────────────────────────────────
 MODEL_1="Qwen/Qwen2.5-7B-Instruct"
@@ -31,7 +44,8 @@ except Exception as e:
     print('\n[ERROR] Failed to access $MODEL_2!')
     print('This is a gated model. You must do two things before running this script:')
     print('  1. Go to https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct and accept the usage license.')
-    print('  2. Run \"huggingface-cli login\" in your terminal and paste your HF Token.')
+    print('  2. Make sure your HF_TOKEN is valid and not expired.')
+    print(f'  Error: {e}')
     sys.exit(1)
 "
 if [ $? -ne 0 ]; then

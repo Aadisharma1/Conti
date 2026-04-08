@@ -18,10 +18,11 @@ wandb/
 
 # SEAL project
 .venv/
-results/
 data/
 seal_project/.venv/
-seal_project/results/
 seal_project/data/
 seal_project/checkpoints/
+seal_project/results/local_test/
 
+
+Conti_seal_project wirh results ran on rtx 6000 pro/

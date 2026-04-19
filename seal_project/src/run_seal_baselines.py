@@ -15,7 +15,9 @@ Usage (from seal_project/):
     python src/run_seal_baselines.py --max-passages 50  # half budget
 """
 
+import getpass
 import json
+import os
 import sys
 import time
 import argparse
@@ -24,6 +26,21 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import get_peft_model
+
+
+def ensure_hf_token():
+    """Prompt for HuggingFace token at startup if not already set."""
+    if os.environ.get("HF_TOKEN"):
+        print("  HF_TOKEN: found in environment ✓")
+        return
+    print("\n  HuggingFace token required to download Qwen/Qwen2.5-7B.")
+    print("  (Get yours at https://huggingface.co/settings/tokens)\n")
+    token = getpass.getpass("  Enter HF_TOKEN: ").strip()
+    if not token:
+        print("[ERROR] No token provided. Exiting.")
+        sys.exit(1)
+    os.environ["HF_TOKEN"] = token
+    print("  HF_TOKEN: set ✓\n")
 
 from config import SEALConfig
 from data_loader import (
@@ -327,6 +344,9 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+
+    # ── API Key prompt ────────────────────────────────────────────
+    ensure_hf_token()
 
     # ── Build config ──────────────────────────────────────────────
     cfg = SEALConfig(

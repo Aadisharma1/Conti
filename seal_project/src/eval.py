@@ -7,6 +7,7 @@ Loads a PEFT/LoRA model (bfloat16) and evaluates on:
   4. XSTEST (Refusal %)
 """
 
+import getpass
 import os
 import re
 import json
@@ -78,23 +79,27 @@ def normalize_answer(s: str) -> str:
 
 
 def eval_squad(model, tokenizer, max_samples: int = 200) -> Dict:
+    """
+    CLOSED-BOOK SQuAD evaluation (SEAL paper, Section 4.2).
+    The model NEVER sees the context paragraph — it must answer from memory.
+    Prompt: "Answer the following question.\nQuestion: {q}\nAnswer:"
+    """
     ds = load_dataset("rajpurkar/squad_v2", split="validation")
 
     correct, total = 0, 0
-    for row in tqdm(ds, desc="squad eval", total=min(max_samples, len(ds))):
+    for row in tqdm(ds, desc="squad eval (closed-book)", total=min(max_samples, len(ds))):
         if total >= max_samples:
             break
         if not row["answers"]["text"]:
             continue
 
-        gold = row["answers"]["text"][0]
-        ctx = row["context"][:1000]  # truncate long contexts
+        gold_answers = row["answers"]["text"]  # all valid answers
         q = row["question"]
 
+        # CLOSED-BOOK: no passage, no context, just the question
         prompt = (
-            f"Read the passage and answer the question with a short answer.\n\n"
-            f"Passage: {ctx}\n\n"
-            f"Question: {q}\n\n"
+            f"Answer the following question.\n"
+            f"Question: {q}\n"
             f"Answer:"
         )
 
@@ -102,12 +107,14 @@ def eval_squad(model, tokenizer, max_samples: int = 200) -> Dict:
         # take first line/sentence
         pred = pred.split("\n")[0].split(".")[0].strip()
 
-        if normalize_answer(gold) in normalize_answer(pred):
+        # exact match against ANY valid gold answer
+        pred_norm = normalize_answer(pred)
+        if any(normalize_answer(g) == pred_norm for g in gold_answers):
             correct += 1
         total += 1
 
     em = correct / max(total, 1)
-    print(f"  SQuAD EM: {em:.4f} ({correct}/{total})")
+    print(f"  SQuAD EM (closed-book): {em:.4f} ({correct}/{total})")
     return {"squad_em": em, "squad_correct": correct, "squad_total": total}
 
 
@@ -292,6 +299,12 @@ def main():
     parser.add_argument("--advbench-samples", type=int, default=100)
     parser.add_argument("--xstest-samples", type=int, default=200)
     args = parser.parse_args()
+
+    # HF token prompt
+    if not os.environ.get("HF_TOKEN"):
+        token = getpass.getpass("Enter HF_TOKEN: ").strip()
+        if token:
+            os.environ["HF_TOKEN"] = token
 
     model, tokenizer = load_model(args.base_model, args.adapter_path)
     results = run_all_evals(model, tokenizer, args)

@@ -24,18 +24,18 @@ if [ -z "$HF_TOKEN" ]; then
 fi
 
 # ─── GPU CHECK ──────────────────────────────────────────────
-python3 -c "
+python3 - <<'PYEOF'
 import torch
 n = torch.cuda.device_count()
 print(f'  GPUs detected: {n}')
 for i in range(n):
     name = torch.cuda.get_device_name(i)
-    mem = torch.cuda.get_device_properties(i).total_mem / 1e9
+    mem = torch.cuda.get_device_properties(i).total_memory / 1e9
     print(f'    cuda:{i}  {name}  ({mem:.0f} GB)')
 if n == 0:
     print('[ERROR] No GPUs found!')
     exit(1)
-"
+PYEOF
 echo ""
 
 # ─── CONFIG ─────────────────────────────────────────────────
@@ -263,12 +263,13 @@ echo "============================================"
 echo "  ALL DONE. Results: $RESULTS_DIR/eval_results.json"
 echo "============================================"
 
-python3 -c "
-import json
-with open('$RESULTS_DIR/eval_results.json') as f:
+RESULTS_FILE="$RESULTS_DIR/eval_results.json"
+python3 - "$RESULTS_FILE" <<'PYEOF'
+import sys, json
+with open(sys.argv[1]) as f:
     results = json.load(f)
-print(f\"{'Arm':<30} {'SQuAD EM':>10} {'GSM8K':>10} {'AdvBench':>10} {'XSTEST':>10}\")
-print('-'*70)
+print(f"{'Arm':<30} {'SQuAD EM':>10} {'GSM8K':>10} {'AdvBench':>10} {'XSTEST':>10}")
+print('-' * 70)
 for r in results:
-    print(f\"{r['arm']:<30} {r.get('squad_em',0):>10.4f} {r.get('gsm8k_pass1',0):>10.4f} {r.get('advbench_asr',0):>10.4f} {r.get('xstest_refusal_pct',0):>10.4f}\")
-"
+    print(f"{r['arm']:<30} {r.get('squad_em',0):>10.4f} {r.get('gsm8k_pass1',0):>10.4f} {r.get('advbench_asr',0):>10.4f} {r.get('xstest_refusal_pct',0):>10.4f}")
+PYEOF

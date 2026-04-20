@@ -145,7 +145,11 @@ def eval_squad(model, tokenizer, max_samples: int = 200) -> Dict:
         q = row["question"]
 
         prompt = (
-            f"Answer the following question.\n"
+            f"Answer the question with a single short phrase or word.\n\n"
+            f"Question: What is the capital of France?\n"
+            f"Answer: Paris\n\n"
+            f"Question: In what year did the Apollo 11 moon landing occur?\n"
+            f"Answer: 1969\n\n"
             f"Question: {q}\n"
             f"Answer:"
         )

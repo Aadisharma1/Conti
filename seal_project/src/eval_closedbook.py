@@ -47,13 +47,16 @@ def generate_batch(
     model,
     tokenizer,
     prompts: List[str],
-    max_new_tokens: int = 32,
+    max_new_tokens: int = 15,  # Reduced to 15 to prevent Base model babbling
 ) -> List[str]:
     """
     Generate short answers for a batch of prompts.
     Uses greedy decoding (do_sample=False) for deterministic eval.
     """
     device = model.get_input_embeddings().weight.device
+
+    # Ensure padding side is explicitly left for batched generation
+    tokenizer.padding_side = "left"
 
     encodings = tokenizer(
         prompts,
@@ -64,20 +67,27 @@ def generate_batch(
     )
     encodings = {k: v.to(device) for k, v in encodings.items()}
 
+    # Fallback to eos_token_id if pad_token_id isn't set (common in Qwen base)
+    pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+
     outputs = model.generate(
         **encodings,
         max_new_tokens=max_new_tokens,
         do_sample=False,
-        temperature=1.0,
-        pad_token_id=tokenizer.pad_token_id,
+        pad_token_id=pad_token_id,
     )
 
+    # THE FIX: Slice based on the exact 2D shape of the padded input tensor, 
+    # not the attention mask sum, which breaks on left-padded sequences.
+    prompt_length = encodings["input_ids"].shape[1]
+    
     responses = []
-    for i, output_ids in enumerate(outputs):
-        input_len = int(encodings["attention_mask"][i].sum().item())
-        new_tokens = output_ids[input_len:]
+    for output_ids in outputs:
+        # Extract ONLY the newly generated tokens
+        new_tokens = output_ids[prompt_length:]
         text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-        # take first line, then first sentence fragment
+        
+        # Stop the base model from rambling (split at newline or period)
         text = text.split("\n")[0].split(".")[0].strip()
         responses.append(text)
 
@@ -93,7 +103,7 @@ def eval_closedbook_squad(
     tokenizer,
     questions: List[Dict],
     batch_size: int = 32,
-    max_new_tokens: int = 32,
+    max_new_tokens: int = 15, # Hardcoded short constraint
     desc: str = "eval",
 ) -> Dict:
     """

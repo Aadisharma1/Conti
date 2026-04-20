@@ -79,7 +79,7 @@ def load_gsm8k_raw(max_samples: int = 500) -> List[Dict]:
     """
     cache_path = Path("/tmp/gsm8k_test.jsonl")
     if not cache_path.exists():
-        print(f"  downloading GSM8K from {GSME8K_URL}...")
+        print(f"  downloading GSM8K from {GSM8K_URL}...")
         urllib.request.urlretrieve(GSM8K_URL, cache_path)
         print("  GSM8K downloaded OK")
 
@@ -217,25 +217,6 @@ def generate_squad_edits(
     Output format matches what groq_generator.py produced:
     {"messages": [{"role": "user", "content": "Question: ..."}, {"role": "assistant", "content": "answer"}]}
     """
-    try:
-        ds = load_dataset("rajpurkar/squad_v2", split="validation")
-    except Exception:
-        print("  [warn] squad_v2 failed, falling back to squad v1")
-        ds = load_dataset("rajpurkar/squad", split="validation")
-
-    # collect unique contexts with their gold Q&A
-    contexts = []
-    for row in ds:
-        if not row["answers"]["text"]:
-            continue
-        contexts.append({
-            "context": row["context"],
-            "question": row["question"],
-            "answer": row["answers"]["text"][0],
-        })
-        if len(contexts) >= max_samples:
-            break
-
     print(f"  generating self-edits for SQuAD (max {max_samples})...")
     rows = load_squad_raw(max_samples=max_samples)
     print(f"  loaded {len(rows)} SQuAD Q&A pairs")

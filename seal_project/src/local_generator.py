@@ -81,26 +81,38 @@ def generate_batch(
     temperature: float = 0.7,
     top_p: float = 0.9,
 ) -> List[str]:
-    """Generate completions for a batch of prompts."""
+    """Generate completions for a batch of prompts. OOM-safe."""
     device = model.get_input_embeddings().weight.device
 
-    encodings = tokenizer(
-        prompts,
-        padding=True,
-        truncation=True,
-        max_length=2048,
-        return_tensors="pt",
-    )
-    encodings = {k: v.to(device) for k, v in encodings.items()}
+    # OOM guard: if we get a CUDA OOM, halve the batch and retry
+    try:
+        encodings = tokenizer(
+            prompts,
+            padding=True,
+            truncation=True,
+            max_length=2048,
+            return_tensors="pt",
+        )
+        encodings = {k: v.to(device) for k, v in encodings.items()}
 
-    outputs = model.generate(
-        **encodings,
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        temperature=temperature,
-        top_p=top_p,
-        pad_token_id=tokenizer.pad_token_id,
-    )
+        outputs = model.generate(
+            **encodings,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+    except torch.cuda.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        if len(prompts) == 1:
+            print("  [warn] OOM even on single sample, skipping")
+            return ["" for _ in prompts]
+        mid = len(prompts) // 2
+        print(f"  [warn] OOM on batch of {len(prompts)}, splitting to {mid}+{len(prompts)-mid}")
+        left = generate_batch(model, tokenizer, prompts[:mid], max_new_tokens, temperature, top_p)
+        right = generate_batch(model, tokenizer, prompts[mid:], max_new_tokens, temperature, top_p)
+        return left + right
 
     results = []
     for i, out_ids in enumerate(outputs):
@@ -129,7 +141,11 @@ def generate_squad_edits(
     Output format matches what groq_generator.py produced:
     {"messages": [{"role": "user", "content": "Question: ..."}, {"role": "assistant", "content": "answer"}]}
     """
-    ds = load_dataset("rajpurkar/squad_v2", split="validation")
+    try:
+        ds = load_dataset("rajpurkar/squad_v2", split="validation")
+    except Exception:
+        print("  [warn] squad_v2 failed, falling back to squad v1")
+        ds = load_dataset("rajpurkar/squad", split="validation")
 
     # collect unique contexts with their gold Q&A
     contexts = []

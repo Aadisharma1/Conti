@@ -236,9 +236,9 @@ def train(
     train_loader = DataLoader(
         combined,
         batch_size=args.batch_size,
-        shuffle=True,  # shuffle so replay samples are interleaved
+        shuffle=True,
         num_workers=0,
-        drop_last=True,
+        drop_last=False,  # never drop — small datasets would lose data
     )
 
     # ── Compute EWC on SAFETY data (not training data!) ───
@@ -255,6 +255,8 @@ def train(
         else:
             print("  WARNING: ewc_lambda > 0 but no --fisher-data provided!")
             print("  EWC will NOT be applied. Pass --fisher-data with safety anchor data.")
+
+    torch.cuda.empty_cache()  # free Fisher computation memory before training
 
     # optimizer
     optimizer = torch.optim.AdamW(
@@ -376,9 +378,6 @@ def main():
         trust_remote_code=True,
     )
 
-    # gradient checkpointing — critical for fitting on single 96GB GPU
-    model.gradient_checkpointing_enable()
-
     if args.adapter_path:
         # Load existing adapter and continue training
         from peft import PeftModel
@@ -396,6 +395,10 @@ def main():
             bias="none",
         )
         model = get_peft_model(model, lora_config)
+
+    # gradient checkpointing MUST come after get_peft_model() wrapping
+    model.gradient_checkpointing_enable()
+    model.enable_input_require_grads()  # required when using grad checkpointing with LoRA
     
     model.print_trainable_parameters()
 

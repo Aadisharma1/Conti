@@ -14,13 +14,89 @@ import getpass
 import json
 import os
 import re
+import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import torch
-from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SQuAD loader — bypasses datasets library entirely
+# ═══════════════════════════════════════════════════════════════════
+
+SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
+
+
+def load_squad_raw(max_samples: int = 500) -> List[Dict]:
+    """
+    Download SQuAD v1.1 validation JSON directly — no datasets library needed.
+    Returns list of {context, question, answer} dicts.
+    """
+    cache_path = Path("/tmp/squad_dev.json")
+    if not cache_path.exists():
+        print(f"  downloading SQuAD from {SQUAD_URL}...")
+        urllib.request.urlretrieve(SQUAD_URL, cache_path)
+        print("  SQuAD downloaded OK")
+
+    with open(cache_path) as f:
+        data = json.load(f)
+
+    items = []
+    for article in data["data"]:
+        for para in article["paragraphs"]:
+            ctx = para["context"]
+            for qa in para["qas"]:
+                if qa.get("is_impossible", False):
+                    continue
+                answers = qa.get("answers", [])
+                if not answers:
+                    continue
+                items.append({
+                    "context": ctx,
+                    "question": qa["question"],
+                    "answer": answers[0]["text"],
+                    "all_answers": [a["text"] for a in answers],
+                })
+                if len(items) >= max_samples:
+                    return items
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════
+# GSM8K loader — also bypass datasets if broken
+# ═══════════════════════════════════════════════════════════════════
+
+GSM8K_URL = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
+
+
+def load_gsm8k_raw(max_samples: int = 500) -> List[Dict]:
+    """
+    Download GSM8K test JSONL directly — no datasets library needed.
+    Returns list of {question, answer} dicts.
+    """
+    cache_path = Path("/tmp/gsm8k_test.jsonl")
+    if not cache_path.exists():
+        print(f"  downloading GSM8K from {GSME8K_URL}...")
+        urllib.request.urlretrieve(GSM8K_URL, cache_path)
+        print("  GSM8K downloaded OK")
+
+    items = []
+    with open(cache_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            items.append({
+                "question": row["question"],
+                "answer": row["answer"],
+            })
+            if len(items) >= max_samples:
+                break
+    return items
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -160,19 +236,19 @@ def generate_squad_edits(
         if len(contexts) >= max_samples:
             break
 
-    print(f"  generating self-edits for {len(contexts)} SQuAD passages...")
+    print(f"  generating self-edits for SQuAD (max {max_samples})...")
+    rows = load_squad_raw(max_samples=max_samples)
+    print(f"  loaded {len(rows)} SQuAD Q&A pairs")
 
     edits = []
-    for i in tqdm(range(0, len(contexts), batch_size), desc="squad gen"):
-        batch = contexts[i : i + batch_size]
+    for i in tqdm(range(0, len(rows), batch_size), desc="squad gen"):
+        batch = rows[i : i + batch_size]
         prompts = [SQUAD_GEN_PROMPT.format(context=c["context"][:1500]) for c in batch]
 
         completions = generate_batch(model, tokenizer, prompts, max_new_tokens=128)
 
         for ctx_data, completion in zip(batch, completions):
-            # parse generated Q from completion
             gen_q = completion.split("\n")[0].strip()
-            # find an answer-like line
             lines = completion.split("\n")
             gen_a = ""
             for line in lines[1:]:
@@ -180,18 +256,17 @@ def generate_squad_edits(
                     gen_a = re.sub(r"^[Aa]nswer\s*:\s*", "", line.strip())
                     break
             if not gen_a:
-                # fallback: use the gold answer for a clean training signal
+                # fallback to gold
                 gen_q = ctx_data["question"]
                 gen_a = ctx_data["answer"]
 
-            edit = {
+            edits.append({
                 "messages": [
                     {"role": "user", "content": f"Answer the following question.\nQuestion: {gen_q}\nAnswer:"},
                     {"role": "assistant", "content": gen_a},
                 ],
                 "source": "local_qwen_squad",
-            }
-            edits.append(edit)
+            })
 
     print(f"  generated {len(edits)} SQuAD self-edits")
     return edits
@@ -207,19 +282,16 @@ def generate_gsm8k_edits(
     max_samples: int = 200,
     batch_size: int = 8,
 ) -> List[Dict]:
-    """Generate self-edit trajectories from GSM8K train split."""
-    ds = load_dataset("gsm8k", "main", split="train")
-
-    items = []
-    for row in ds:
-        items.append({
-            "question": row["question"],
-            "answer": row["answer"],
-        })
-        if len(items) >= max_samples:
-            break
-
-    print(f"  generating self-edits for {len(items)} GSM8K problems...")
+    """Generate self-edit trajectories from GSM8K."""
+    print(f"  generating self-edits for GSM8K (max {max_samples})...")
+    try:
+        items = load_gsm8k_raw(max_samples=max_samples)
+    except Exception as e:
+        print(f"  [warn] GSM8K raw download failed ({e}), trying datasets library")
+        from datasets import load_dataset
+        ds = load_dataset("gsm8k", "main", split="train")
+        items = [{"question": r["question"], "answer": r["answer"]} for r in ds][:max_samples]
+    print(f"  loaded {len(items)} GSM8K problems")
 
     edits = []
     for i in tqdm(range(0, len(items), batch_size), desc="gsm8k gen"):

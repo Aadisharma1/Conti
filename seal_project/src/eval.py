@@ -12,6 +12,7 @@ import os
 import re
 import json
 import argparse
+import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -20,6 +21,58 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from datasets import load_dataset
 from tqdm import tqdm
+
+
+# ─── Raw data loaders (bypass datasets library) ────────────────
+
+SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
+GSM8K_URL = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
+
+
+def _load_squad_raw(max_samples: int = 99999) -> List[Dict]:
+    cache = Path("/tmp/squad_dev.json")
+    if not cache.exists():
+        print(f"  downloading SQuAD from {SQUAD_URL}...")
+        urllib.request.urlretrieve(SQUAD_URL, cache)
+    with open(cache) as f:
+        data = json.load(f)
+    items = []
+    for article in data["data"]:
+        for para in article["paragraphs"]:
+            ctx = para["context"]
+            for qa in para["qas"]:
+                if qa.get("is_impossible", False):
+                    continue
+                answers = qa.get("answers", [])
+                if not answers:
+                    continue
+                items.append({
+                    "context": ctx,
+                    "question": qa["question"],
+                    "answer": answers[0]["text"],
+                    "all_answers": [a["text"] for a in answers],
+                })
+                if len(items) >= max_samples:
+                    return items
+    return items
+
+
+def _load_gsm8k_raw(max_samples: int = 99999) -> List[Dict]:
+    cache = Path("/tmp/gsm8k_test.jsonl")
+    if not cache.exists():
+        print(f"  downloading GSM8K from {GSM8K_URL}...")
+        urllib.request.urlretrieve(GSM8K_URL, cache)
+    items = []
+    with open(cache) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            items.append({"question": row["question"], "answer": row["answer"]})
+            if len(items) >= max_samples:
+                break
+    return items
 
 
 # ─── Model loading ────────────────────────────────────────────
@@ -81,28 +134,16 @@ def normalize_answer(s: str) -> str:
 def eval_squad(model, tokenizer, max_samples: int = 200) -> Dict:
     """
     CLOSED-BOOK SQuAD evaluation (SEAL paper, Section 4.2).
-    The model NEVER sees the context paragraph — it must answer from memory.
-    Prompt: "Answer the following question.\nQuestion: {q}\nAnswer:"
+    Downloads raw JSON directly — bypasses broken datasets library schema.
     """
-    try:
-        ds = load_dataset("rajpurkar/squad_v2", split="validation")
-    except Exception:
-        print("  [warn] squad_v2 schema issue, falling back to squad v1")
-        ds = load_dataset("rajpurkar/squad", split="validation")
+    print("  loading SQuAD (raw JSON)...")
+    rows = _load_squad_raw(max_samples=max_samples)
 
     correct, total = 0, 0
-    for row in tqdm(ds, desc="squad eval (closed-book)", total=min(max_samples, len(ds))):
-        if total >= max_samples:
-            break
-        answers = row.get("answers", {})
-        answer_texts = answers.get("text", []) if isinstance(answers, dict) else []
-        if not answer_texts:
-            continue
-
-        gold_answers = answer_texts
+    for row in tqdm(rows, desc="squad eval (closed-book)"):
+        gold_answers = row["all_answers"]
         q = row["question"]
 
-        # CLOSED-BOOK: no passage, no context, just the question
         prompt = (
             f"Answer the following question.\n"
             f"Question: {q}\n"
@@ -116,10 +157,7 @@ def eval_squad(model, tokenizer, max_samples: int = 200) -> Dict:
             total += 1
             continue
 
-        # take first line/sentence
         pred = pred.split("\n")[0].split(".")[0].strip()
-
-        # exact match against ANY valid gold answer
         pred_norm = normalize_answer(pred)
         if any(normalize_answer(g) == pred_norm for g in gold_answers):
             correct += 1
@@ -127,6 +165,8 @@ def eval_squad(model, tokenizer, max_samples: int = 200) -> Dict:
 
     em = correct / max(total, 1)
     print(f"  SQuAD EM (closed-book): {em:.4f} ({correct}/{total})")
+
+
     return {"squad_em": em, "squad_correct": correct, "squad_total": total}
 
 
@@ -154,25 +194,33 @@ def extract_number(text: str) -> Optional[float]:
 
 
 def eval_gsm8k(model, tokenizer, max_samples: int = 200) -> Dict:
-    ds = load_dataset("openai/gsm8k", "main", split="test")
+    print("  loading GSM8K (raw JSONL)...")
+    try:
+        rows = _load_gsm8k_raw(max_samples=max_samples)
+    except Exception as e:
+        print(f"  [warn] GSM8K raw download failed: {e}")
+        try:
+            ds = load_dataset("openai/gsm8k", "main", split="test")
+            rows = [{"question": r["question"], "answer": r["answer"]} for r in ds][:max_samples]
+        except Exception:
+            print("  [warn] GSM8K unavailable, skipping")
+            return {"gsm8k_pass1": -1, "gsm8k_correct": 0, "gsm8k_total": 0}
 
     correct, total = 0, 0
-    for row in tqdm(ds, desc="gsm8k eval", total=min(max_samples, len(ds))):
-        if total >= max_samples:
-            break
-
-        question = row["question"]
-        gold_answer = row["answer"]
-        gold_num = extract_number(gold_answer)
-
+    for row in tqdm(rows, desc="gsm8k eval"):
+        gold_num = extract_number(row["answer"])
         prompt = (
             f"Solve this math problem step by step.\n\n"
-            f"Problem: {question}\n\n"
+            f"Problem: {row['question']}\n\n"
             f"Solution:"
         )
-
-        pred = generate(model, tokenizer, prompt, max_new_tokens=300)
-        pred_num = extract_number(pred)
+        try:
+            pred = generate(model, tokenizer, prompt, max_new_tokens=300)
+            pred_num = extract_number(pred)
+        except Exception as e:
+            print(f"  [warn] gsm8k generate failed: {e}")
+            total += 1
+            continue
 
         if gold_num is not None and pred_num is not None:
             if abs(gold_num - pred_num) < 1e-3:

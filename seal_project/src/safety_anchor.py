@@ -14,7 +14,6 @@ import json
 import argparse
 from pathlib import Path
 
-from datasets import load_dataset
 from tqdm import tqdm
 
 
@@ -111,20 +110,12 @@ def build_safety_anchor(output_path: str, n_refusals: int = 50, n_helpful: int =
     samples = []
 
     # ── Part 1: harmful prompts with refusal responses ────────────
-    print("  loading harmful prompts (DoNotAnswer)...")
-    harmful_prompts = []
-    try:
-        ds = load_dataset("LibrAI/do-not-answer", split="train")
-        harmful_prompts = [row["question"] for row in ds][:n_refusals]
-        print(f"  loaded {len(harmful_prompts)} prompts from DoNotAnswer dataset")
-    except Exception as e:
-        print(f"  [warn] DoNotAnswer unavailable ({e}), using fallback list")
-
-    # top up to n_refusals with fallback if needed
-    if len(harmful_prompts) < n_refusals:
-        needed = n_refusals - len(harmful_prompts)
-        extra = (HARMFUL_PROMPTS_FALLBACK * (needed // len(HARMFUL_PROMPTS_FALLBACK) + 1))[:needed]
-        harmful_prompts.extend(extra)
+    # Use hardcoded harmful prompts — DoNotAnswer has schema incompatibilities
+    # with newer datasets versions on Python 3.12. The hardcoded list is
+    # sufficient for EWC Fisher computation (quality > quantity here).
+    print("  using hardcoded harmful prompt list (no HuggingFace download)...")
+    repeated = (HARMFUL_PROMPTS_FALLBACK * (n_refusals // len(HARMFUL_PROMPTS_FALLBACK) + 1))
+    harmful_prompts = repeated[:n_refusals]
 
     print(f"  building {len(harmful_prompts)} refusal examples (local hardcoded responses)...")
     for prompt in tqdm(harmful_prompts, desc="  refusals"):

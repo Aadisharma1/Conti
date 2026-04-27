@@ -10,7 +10,7 @@ model:
   lora_alpha: 64
   lora_dropout: 0.0
   max_seq_length: 2048
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # OFF — we have 96GB, trade memory for speed
   attn_implementation: null
 
 verifier:
@@ -24,8 +24,8 @@ verifier:
 
 replay:
   enabled: true
-  safety_samples_per_batch: 4
-  dataset_path: null  # uses bundled conti/data/safety_replay.jsonl
+  safety_samples_per_batch: 8   # more safety anchoring per batch
+  dataset_path: null
 
 ewc:
   enabled: false
@@ -40,18 +40,18 @@ logging:
 
 loop:
   experiment: phase2_verifier_buffer
-  num_self_improve_rounds: 2
-  generate_batch_size: 4
-  train_micro_batch_size: 1
-  gradient_accumulation_steps: 8
+  num_self_improve_rounds: 3     # 3 rounds instead of 2
+  generate_batch_size: 16        # 4x larger gen batches (way faster)
+  train_micro_batch_size: 4      # 4x larger train batches (uses ~50-60GB VRAM)
+  gradient_accumulation_steps: 4  # effective batch = 16
   learning_rate: 2.0e-5
   num_epochs_per_round: 1
-  max_train_samples_per_round: 200
+  max_train_samples_per_round: 500  # 2.5x more training data per round
   warmup_ratio: 0.03
   weight_decay: 0.01
   generation_temperature: 0.7
   generation_top_p: 0.95
-  generation_max_new_tokens: 512
+  generation_max_new_tokens: 768  # longer CoT chains
   eval_every_round: true
   require_correct_trajectory: true
   max_grad_norm: 1.0
@@ -64,4 +64,4 @@ data:
     - advbench_subset
     - xstest_subset
     - donotanswer_subset
-  max_prompts_per_eval: 50
+  max_prompts_per_eval: 100  # more thorough eval

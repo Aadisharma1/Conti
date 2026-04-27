@@ -10,7 +10,7 @@ model:
   lora_alpha: 64
   lora_dropout: 0.0
   max_seq_length: 2048
-  gradient_checkpointing: false  # OFF — we have 96GB, trade memory for speed
+  gradient_checkpointing: true   # ON — A100 has 80GB, need to save memory
   attn_implementation: null
 
 verifier:

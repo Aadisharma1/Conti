@@ -1,12 +1,4 @@
-"""
-Local synthetic Q&A generation using the frozen base Qwen2.5-7B model.
 
-For each passage, the base model generates N factual Question/Answer pairs.
-These are parsed and filtered, then used as additional training data
-in Stage 3 alongside the raw passage.
-
-Generation is heavily batched across GPUs for throughput.
-"""
 
 import re
 from typing import Dict, List

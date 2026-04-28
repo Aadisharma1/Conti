@@ -1,14 +1,3 @@
-"""
-Per-passage LoRA training with fresh adapter re-initialisation.
-
-The SEAL inner loop:
-  1. Reset all LoRA weights to random init (A=kaiming, B=zeros)
-  2. Train for N epochs on a tiny dataset (1 passage ± synthetic Q&A)
-  3. Evaluate, then move to the next passage
-
-The base model stays in GPU memory the entire time —
-only LoRA weights change between passages.
-"""
 
 import torch
 import torch.nn as nn

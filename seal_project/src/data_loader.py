@@ -1,9 +1,3 @@
-"""
-SQuAD data loading with passage grouping and prompt-formatted datasets.
-
-Groups SQuAD v2 questions by their context paragraph so we can do
-per-passage inner-loop training as described in SEAL Section 4.2.
-"""
 
 import random
 from collections import defaultdict

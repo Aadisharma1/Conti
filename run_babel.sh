@@ -44,21 +44,11 @@ conda activate conti_env
 echo "[OK] Python version: $(python --version)"
 echo "[OK] Pip version: $(pip --version)"
 
-# -------------------------------------------------------
 # 2. INSTALL DEPENDENCIES
-# -------------------------------------------------------
 echo "[STEP 3/5] Installing dependencies..."
-
-# Install PyTorch first (CUDA 12.1 for L40/A100)
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Install project deps
 pip install --quiet -r requirements.txt
-
-# Install wandb (needed for logging)
 pip install --quiet wandb
-
-# Install the project itself in editable mode
 pip install --quiet -e .
 
 echo "[OK] All dependencies installed."
@@ -85,9 +75,7 @@ export PYTHONPATH="."
 export HF_HOME="${SLURM_TMPDIR:-/tmp}/hf_cache"
 export TRANSFORMERS_CACHE="${HF_HOME}"
 
-# -------------------------------------------------------
 # 4. RUN THE EXPERIMENT
-# -------------------------------------------------------
 echo "[STEP 5/5] Launching 10-round Phase 1 experiment..."
 echo "=============================================="
 echo " Config: configs/phase1_10rounds_babel.yaml"

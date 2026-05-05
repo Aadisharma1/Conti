@@ -7,11 +7,10 @@
 #SBATCH --mem=80G
 #SBATCH --cpus-per-task=8
 #SBATCH --time=72:00:00
+#SBATCH --export=ALL
 #SBATCH --mail-type=END,FAIL
-# -----------------------------------------------------------
-# CONTI SAFETY — Bulletproof SLURM launcher for CMU LTI Babel
+
 # Usage: WANDB_API_KEY="your_key" sbatch run_babel.sh
-# -----------------------------------------------------------
 
 set -euo pipefail
 
@@ -23,12 +22,8 @@ echo " GPU:    $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null |
 echo " Time:   $(date)"
 echo "=============================================="
 
-# -------------------------------------------------------
-# 1. ENVIRONMENT NUKE & PAVE
-# -------------------------------------------------------
-echo "[STEP 1/5] Nuking old environment..."
+echo "[STEP 1/5] setting up environment..."
 
-# Load Anaconda — try common CMU module names
 module purge 2>/dev/null || true
 module load anaconda3 2>/dev/null || module load anaconda 2>/dev/null || module load conda 2>/dev/null || {
     echo "[WARN] No anaconda module found. Trying system conda..."

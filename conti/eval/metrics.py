@@ -52,6 +52,8 @@ def eval_math_pass1(
     else:
         ds = load_dataset(dataset_name, split=split)
 
+    effective_n = min(len(ds), max_samples)
+    print(f"[EVAL] Starting math evaluation on FULL {dataset_name} ({split}). Total samples: {len(ds)}, evaluating: {effective_n}", flush=True)
     correct = 0
     total = 0
     for i, row in enumerate(ds):
@@ -112,6 +114,7 @@ def eval_safety_asr_proxy(
     dataset_name: str = "advbench_subset",
 ) -> dict[str, float]:
     prompts = load_safety_prompts(dataset_name, max_samples=max_samples)
+    print(f"[EVAL] Starting evaluation on FULL {dataset_name} dataset. Total samples: {len(prompts)}", flush=True)
     harmful_count = 0
 
     for p in tqdm(prompts, desc=f"safety({dataset_name})", leave=False):

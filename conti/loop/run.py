@@ -317,7 +317,94 @@ def run_experiment(cfg: ContiConfig) -> None:
         final["drift_summary"] = drift.to_summary_dict()
         (out / "metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
 
+        # ═══════════════════════════════════════════════════════
+        #  FINAL RESULTS — printed to stdout for W&B capture
+        # ═══════════════════════════════════════════════════════
+        _print_final_report(cfg, final, rnd_metrics, drift)
+
+        # W&B artifact backup
+        if cfg.logging.use_wandb:
+            try:
+                import wandb
+                for f in (out / "logs").glob("*"):
+                    wandb.save(str(f), policy="now")
+                wandb.save(str(out / "metrics.json"), policy="now")
+            except Exception:
+                pass
+
     logger.finish()
+
+
+def _print_final_report(cfg, final, rnd_metrics, drift):
+    """Print a beautiful ASCII report to stdout — W&B captures this automatically."""
+    import sys
+
+    sep = "=" * 72
+    thin = "-" * 72
+
+    print(f"\n\n{sep}", flush=True)
+    print(f"  CONTI SAFETY — FINAL EXPERIMENT REPORT", flush=True)
+    print(f"  Model:      {cfg.model.name_or_path}", flush=True)
+    print(f"  Experiment: {cfg.loop.experiment}", flush=True)
+    print(f"  Rounds:     {cfg.loop.num_self_improve_rounds}", flush=True)
+    print(f"{sep}\n", flush=True)
+
+    # --- Math ---
+    math = final.get("math_pass1", {})
+    print(f"  MATH (GSM8K Pass@1)", flush=True)
+    print(f"  {thin}", flush=True)
+    print(f"  Final Accuracy:  {math.get('accuracy', 0):.1%}  (n={math.get('n', 0)})", flush=True)
+    print(f"  95% CI:          [{math.get('ci95_low', 0):.3f}, {math.get('ci95_high', 0):.3f}]", flush=True)
+
+    # Per-round math progression
+    if rnd_metrics:
+        print(f"\n  Per-Round Math Progression:", flush=True)
+        print(f"  {'Round':<8} {'Accuracy':<12} {'Accepted':<12} {'Rej(wrong)':<12}", flush=True)
+        print(f"  {thin}", flush=True)
+        for rm in rnd_metrics:
+            r = rm.get("round", "?")
+            a = rm.get("math_pass1", {}).get("accuracy", 0)
+            acc_n = rm.get("accepted", 0)
+            rej_c = rm.get("rej_correctness", 0)
+            print(f"  {r:<8} {a:<12.1%} {acc_n:<12} {rej_c:<12}", flush=True)
+
+    # --- Safety ---
+    safety = final.get("safety_asr", {})
+    print(f"\n  SAFETY (Attack Success Rate — lower is safer)", flush=True)
+    print(f"  {thin}", flush=True)
+    print(f"  {'Benchmark':<25} {'ASR':<10} {'n':<8} {'95% CI':<20}", flush=True)
+    print(f"  {thin}", flush=True)
+    for bench, vals in safety.items():
+        if not isinstance(vals, dict) or "asr_proxy" not in vals:
+            continue
+        asr = vals["asr_proxy"]
+        n = vals["n"]
+        lo = vals.get("ci95_low", 0)
+        hi = vals.get("ci95_high", 0)
+        print(f"  {bench:<25} {asr:<10.1%} {n:<8} [{lo:.3f}, {hi:.3f}]", flush=True)
+
+    # --- Drift ---
+    ds = final.get("drift_summary", {})
+    print(f"\n  SAFETY DRIFT SUMMARY", flush=True)
+    print(f"  {thin}", flush=True)
+    print(f"  Last round:       {ds.get('last_round', '?')}", flush=True)
+    print(f"  Worst benchmark:  {ds.get('worst_benchmark', '?')}", flush=True)
+    print(f"  Worst abs drift:  {ds.get('worst_abs_drift', 0):.4f}", flush=True)
+    fd = ds.get("final_drift", {})
+    print(f"\n  Final Drift per Benchmark:", flush=True)
+    for bench, d in fd.items():
+        direction = "↑ WORSE" if d > 0.01 else ("↓ better" if d < -0.01 else "= stable")
+        print(f"    {bench:<25} {d:+.4f}  {direction}", flush=True)
+
+    # --- JSON dump for machine parsing ---
+    print(f"\n{sep}", flush=True)
+    print(f"  RAW JSON (for programmatic access):", flush=True)
+    print(f"{sep}", flush=True)
+    print(json.dumps(final, indent=2), flush=True)
+    print(f"{sep}", flush=True)
+    print(f"  END OF REPORT", flush=True)
+    print(f"{sep}\n", flush=True)
+    sys.stdout.flush()
 
 
 def _make_static_sft(tokenizer, math_items):

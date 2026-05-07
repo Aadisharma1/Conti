@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=conti-safety-10r
+#SBATCH --job-name=conti-safety-p1p2
 #SBATCH --output=conti_%j.out
 #SBATCH --error=conti_%j.err
 #SBATCH --partition=gpu
@@ -10,60 +10,73 @@
 #SBATCH --export=ALL
 #SBATCH --mail-type=END,FAIL
 
-# Usage: WANDB_API_KEY="your_key" sbatch run_babel.sh
+# -----------------------------------------------------------
+# CONTI SAFETY — Full Phase 1 + Phase 2 SLURM launcher
+# CMU LTI Babel (L40 GPU)
+#
+# Usage (PI runs this ONE command):
+#   git clone https://github.com/Aadisharma1/Conti.git && cd Conti && WANDB_API_KEY="key" sbatch run_babel.sh
+# -----------------------------------------------------------
 
 set -euo pipefail
 
 echo "=============================================="
-echo " CONTI SAFETY — SLURM DEPLOYMENT"
-echo " Job ID: $SLURM_JOB_ID"
-echo " Node:   $(hostname)"
-echo " GPU:    $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
-echo " Time:   $(date)"
+echo " CONTI SAFETY — FULL EXPERIMENT (P1 + P2)"
+echo " Job ID:  $SLURM_JOB_ID"
+echo " Node:    $(hostname)"
+echo " GPU:     $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
+echo " Start:   $(date)"
 echo "=============================================="
 
-echo "[STEP 1/5] setting up environment..."
+# -------------------------------------------------------
+# 1. ENVIRONMENT NUKE & PAVE
+# -------------------------------------------------------
+echo "[STEP 1/5] Nuking old environment and creating fresh one..."
 
+# Load Anaconda — try common CMU Babel module names
 module purge 2>/dev/null || true
-module load anaconda3 2>/dev/null || module load anaconda 2>/dev/null || module load conda 2>/dev/null || {
-    echo "[WARN] No anaconda module found. Trying system conda..."
-    export PATH="/opt/anaconda3/bin:/opt/conda/bin:$PATH"
-}
+module load anaconda3 2>/dev/null \
+    || module load anaconda 2>/dev/null \
+    || module load conda 2>/dev/null \
+    || { echo "[WARN] No anaconda module found, trying system paths..."; export PATH="/opt/anaconda3/bin:/opt/conda/bin:$PATH"; }
 
-# Nuke existing env
+# Nuke old env (ignore errors if it doesn't exist)
 conda deactivate 2>/dev/null || true
 conda env remove -n conti_env -y 2>/dev/null || true
 echo "[OK] Old environment removed."
 
-# Create fresh env
-echo "[STEP 2/5] Creating fresh Python 3.10 environment..."
+# Create fresh Python 3.10 env
 conda create -n conti_env python=3.10 -y --quiet
 eval "$(conda shell.bash hook)"
 conda activate conti_env
 
-echo "[OK] Python version: $(python --version)"
-echo "[OK] Pip version: $(pip --version)"
+echo "[OK] Python: $(python --version)"
 
+# -------------------------------------------------------
 # 2. INSTALL DEPENDENCIES
-echo "[STEP 3/5] Installing dependencies..."
+# -------------------------------------------------------
+echo "[STEP 2/5] Installing dependencies..."
+
+# PyTorch with CUDA 12.1 (L40 / A100 compatible)
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Project requirements
 pip install --quiet -r requirements.txt
-pip install --quiet wandb
+
+# Install project as editable package
 pip install --quiet -e .
 
-echo "[OK] All dependencies installed."
-echo "[OK] torch version: $(python -c 'import torch; print(torch.__version__)')"
-echo "[OK] CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
-echo "[OK] GPU: $(python -c 'import torch; print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")')"
+echo "[OK] torch: $(python -c 'import torch; print(torch.__version__)')"
+echo "[OK] CUDA:  $(python -c 'import torch; print(torch.cuda.is_available())')"
+echo "[OK] GPU:   $(python -c 'import torch; print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")')"
 
 # -------------------------------------------------------
 # 3. W&B SETUP
 # -------------------------------------------------------
-echo "[STEP 4/5] Configuring W&B..."
+echo "[STEP 3/5] Configuring W&B..."
 
 if [ -z "${WANDB_API_KEY:-}" ]; then
-    echo "[WARN] WANDB_API_KEY not set. W&B logging will be disabled."
-    echo "[WARN] Results will still print to stdout (captured in SLURM .out file)."
+    echo "[WARN] No WANDB_API_KEY — W&B logging disabled. Results still print to stdout."
 else
     export WANDB_API_KEY="${WANDB_API_KEY}"
     wandb login --relogin "${WANDB_API_KEY}" 2>/dev/null || true
@@ -75,9 +88,12 @@ export PYTHONPATH="."
 export HF_HOME="${SLURM_TMPDIR:-/tmp}/hf_cache"
 export TRANSFORMERS_CACHE="${HF_HOME}"
 
-# 4. RUN THE EXPERIMENT
-echo "[STEP 5/5] Launching 10-round Phase 1 experiment..."
+# -------------------------------------------------------
+# 4. PHASE 1 — Verifier Only (No Replay Buffer)
+# -------------------------------------------------------
+echo ""
 echo "=============================================="
+echo " PHASE 1 — Verifier Only (10 rounds, no replay)"
 echo " Config: configs/phase1_10rounds_babel.yaml"
 echo " Output: ./outputs/babel_phase1_10rounds"
 echo " Start:  $(date)"
@@ -88,27 +104,66 @@ python scripts/run_experiment.py \
     --output-dir ./outputs/babel_phase1_10rounds
 
 echo ""
-echo "=============================================="
-echo " EXPERIMENT COMPLETE"
-echo " End: $(date)"
-echo "=============================================="
+echo "[OK] Phase 1 complete at $(date)"
 
-# -------------------------------------------------------
-# 5. BACKUP TO W&B (if available)
-# -------------------------------------------------------
+# Save Phase 1 to W&B
 if [ -n "${WANDB_API_KEY:-}" ]; then
-    python -c "
+    python - <<'PYEOF'
 import wandb, glob, os
 try:
-    run = wandb.init(project='conti-safety', name='babel_artifacts', reinit=True)
-    for f in glob.glob('outputs/babel_phase1_10rounds/**/*', recursive=True):
-        if os.path.isfile(f) and not f.endswith('.bin'):
-            wandb.save(f, policy='now')
-            print(f'[W&B] Saved: {f}')
+    run = wandb.init(project="conti-safety", name="babel_phase1_artifacts", reinit=True)
+    for f in glob.glob("outputs/babel_phase1_10rounds/**/*", recursive=True):
+        if os.path.isfile(f) and not any(f.endswith(x) for x in [".bin", ".safetensors"]):
+            wandb.save(f, policy="now")
     wandb.finish()
+    print("[W&B] Phase 1 artifacts uploaded.")
 except Exception as e:
-    print(f'[WARN] W&B artifact upload failed: {e}')
-" || true
+    print(f"[WARN] W&B Phase 1 upload failed: {e}")
+PYEOF
 fi
 
-echo "[DONE] All results saved. Check SLURM output file: conti_${SLURM_JOB_ID}.out"
+# -------------------------------------------------------
+# 5. PHASE 2 — Verifier + Replay Buffer
+# -------------------------------------------------------
+echo ""
+echo "=============================================="
+echo " PHASE 2 — Verifier + Replay Buffer (10 rounds)"
+echo " Config: configs/phase2_10rounds_babel.yaml"
+echo " Output: ./outputs/babel_phase2_10rounds"
+echo " Start:  $(date)"
+echo "=============================================="
+
+python scripts/run_experiment.py \
+    --config configs/phase2_10rounds_babel.yaml \
+    --output-dir ./outputs/babel_phase2_10rounds
+
+echo ""
+echo "[OK] Phase 2 complete at $(date)"
+
+# Save Phase 2 to W&B
+if [ -n "${WANDB_API_KEY:-}" ]; then
+    python - <<'PYEOF'
+import wandb, glob, os
+try:
+    run = wandb.init(project="conti-safety", name="babel_phase2_artifacts", reinit=True)
+    for f in glob.glob("outputs/babel_phase2_10rounds/**/*", recursive=True):
+        if os.path.isfile(f) and not any(f.endswith(x) for x in [".bin", ".safetensors"]):
+            wandb.save(f, policy="now")
+    wandb.finish()
+    print("[W&B] Phase 2 artifacts uploaded.")
+except Exception as e:
+    print(f"[WARN] W&B Phase 2 upload failed: {e}")
+PYEOF
+fi
+
+# -------------------------------------------------------
+# DONE
+# -------------------------------------------------------
+echo ""
+echo "=============================================="
+echo " ALL EXPERIMENTS COMPLETE"
+echo " End: $(date)"
+echo " Results in: outputs/babel_phase1_10rounds/"
+echo "             outputs/babel_phase2_10rounds/"
+echo " SLURM log:  conti_${SLURM_JOB_ID}.out"
+echo "=============================================="

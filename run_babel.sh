@@ -63,8 +63,8 @@ pip install --quiet torch torchvision torchaudio --index-url https://download.py
 # Project requirements (excludes flash-attn — needs special install)
 pip install --quiet -r requirements.txt
 
-# flash-attn MUST be installed after torch with no-build-isolation
-pip install --quiet flash-attn --no-build-isolation
+# flash-attn: install after torch. NON-FATAL — fallback to eager attention if build fails
+pip install flash-attn --no-build-isolation 2>/dev/null && echo "[OK] flash-attn installed." || echo "[WARN] flash-attn failed to build — will use eager attention (slower but safe)."
 
 # Install project as editable package
 pip install --quiet -e .
@@ -88,8 +88,26 @@ fi
 
 export WANDB_PROJECT="conti-safety"
 export PYTHONPATH="."
-export HF_HOME="${SLURM_TMPDIR:-/tmp}/hf_cache"
+export HF_HOME="${SLURM_TMPDIR:-$PWD/.hf_cache}"
 export TRANSFORMERS_CACHE="${HF_HOME}"
+export CONTI_GSM8K_CACHE="${SLURM_TMPDIR:-$PWD/.cache}"
+mkdir -p "${HF_HOME}" "${CONTI_GSM8K_CACHE}"
+
+# Verify flash-attn and patch configs if not available
+python - <<'PYEOF'
+import subprocess, sys
+try:
+    import flash_attn
+    print("[OK] flash-attn available — using flash_attention_2")
+except ImportError:
+    print("[WARN] flash-attn not available — patching configs to use eager attention")
+    import re
+    for cfg in ["configs/phase1_10rounds_babel.yaml", "configs/phase2_10rounds_babel.yaml"]:
+        txt = open(cfg).read()
+        txt = txt.replace("attn_implementation: flash_attention_2", "attn_implementation: null")
+        open(cfg, "w").write(txt)
+    print("[OK] Configs patched to attn_implementation: null")
+PYEOF
 
 # -------------------------------------------------------
 # 4. PHASE 1 — Verifier Only (No Replay Buffer)

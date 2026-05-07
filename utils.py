@@ -76,7 +76,10 @@ def _load_gsm8k_raw_fallback(split: str, max_samples: int | None = None) -> list
         "test": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl",
     }
     url = urls.get(split, urls["train"])
-    cache = Path(f"/tmp/gsm8k_{split}.jsonl")
+    import os
+    cache_dir = Path(os.environ.get("CONTI_GSM8K_CACHE", os.environ.get("SLURM_TMPDIR", "/tmp")))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache = cache_dir / f"gsm8k_{split}.jsonl"
     if not cache.exists():
         print(f"  downloading GSM8K {split} from {url}...")
         urllib.request.urlretrieve(url, cache)

@@ -60,8 +60,11 @@ echo "[STEP 2/5] Installing dependencies..."
 # PyTorch with CUDA 12.1 (L40 / A100 compatible)
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# Project requirements
+# Project requirements (excludes flash-attn — needs special install)
 pip install --quiet -r requirements.txt
+
+# flash-attn MUST be installed after torch with no-build-isolation
+pip install --quiet flash-attn --no-build-isolation
 
 # Install project as editable package
 pip install --quiet -e .

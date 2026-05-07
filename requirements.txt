@@ -11,3 +11,4 @@ numpy>=1.26.0,<3
 # optional — only needed for model-based verifier + plotting
 # matplotlib>=3.8.0
 wandb>=0.16.0
+# flash-attn installed separately in run_babel.sh (needs --no-build-isolation)

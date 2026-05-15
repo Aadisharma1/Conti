@@ -12,7 +12,7 @@ from accelerate.utils import broadcast_object_list
 from tqdm import tqdm
 
 from conti.config_schema import ContiConfig
-from conti.eval.drift import DriftTracker
+from conti.eval.drift import DriftTracker, DriftPoint
 from conti.eval.metrics import eval_math_pass1, eval_safety_asr_proxy, eval_safety_multi_benchmark
 from conti.logging import ExperimentLogger
 from conti.replay.buffer import SafetyReplayBuffer
@@ -120,6 +120,35 @@ def _get_asr_scores(safety_results: dict) -> dict[str, float]:
     }
 
 
+def _find_last_completed_round(out: Path) -> int:
+    """Check checkpoint dirs to find last completed round. Returns -1 if none."""
+    ckpt_dir = out / "checkpoints"
+    if not ckpt_dir.exists():
+        return -1
+    rounds = []
+    for d in ckpt_dir.iterdir():
+        if d.is_dir() and d.name.startswith("round_"):
+            try:
+                r = int(d.name.split("_")[1])
+                if any(f.name in ("adapter_config.json", "config.json") for f in d.iterdir()):
+                    rounds.append(r)
+            except (ValueError, IndexError):
+                continue
+    return max(rounds) if rounds else -1
+
+
+def _load_existing_jsonl(path: Path) -> list[dict]:
+    """Load a JSONL file into a list of dicts."""
+    if not path.exists():
+        return []
+    items = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            items.append(json.loads(line))
+    return items
+
+
 def run_experiment(cfg: ContiConfig) -> None:
     _validate_protocol(cfg)
     set_global_seed(cfg.seed)
@@ -149,7 +178,6 @@ def run_experiment(cfg: ContiConfig) -> None:
 
         return
 
-    model, tokenizer = trainer.load_model_tokenizer()
     verifier = _make_verifier(cfg)
 
     replay_path = cfg.replay.dataset_path
@@ -159,31 +187,59 @@ def run_experiment(cfg: ContiConfig) -> None:
     if not cfg.replay.enabled:
         replay_buf = SafetyReplayBuffer(None, cfg.seed)
 
-    # ewc setup if needed
-    if cfg.ewc.enabled:
-        from conti.training.ewc import EWCPenalty
-        ewc = EWCPenalty(model, lambda_ewc=cfg.ewc.lambda_ewc)
-        # TODO: actually compute fisher on safety data.. need dataloader for that
-        trainer.set_ewc(ewc)
-
     math_items = load_math_prompts(
         cfg.data.math_dataset, cfg.data.math_split,
         max_samples=cfg.loop.max_train_samples_per_round,
     )
 
-    # get baseline scores before we touch anything
-    if acc.is_main_process:
-        m = trainer.ensure_model_prepared(model)
-        m.eval()
-        base_metrics = _run_evals(cfg, m, tokenizer, acc.device)
-        drift.set_baseline(_get_asr_scores(base_metrics.get("safety_asr", {})))
-        logger.log_round(-1, {"baseline": base_metrics})
+    # ========== RESUME LOGIC ==========
+    last_completed = _find_last_completed_round(out)
 
-    filt_log: list[dict[str, Any]] = []
-    rnd_metrics: list[dict[str, Any]] = []
-    sup_rounds: list[list[str]] = []
+    if last_completed >= 0:
+        start_round = last_completed + 1
+        if start_round >= cfg.loop.num_self_improve_rounds:
+            print(f"[RESUME] All {cfg.loop.num_self_improve_rounds} rounds already done. Skipping to final eval.")
+            model, tokenizer = trainer.load_from_checkpoint(str(out / "checkpoints" / f"round_{last_completed}"))
+            # jump straight to final save
+            filt_log = _load_existing_jsonl(out / "logs" / "filter_log.jsonl")
+            rnd_metrics = _load_existing_jsonl(out / "logs" / "round_metrics.jsonl")
+            sup_rounds = []
+        else:
+            ckpt_path = str(out / "checkpoints" / f"round_{last_completed}")
+            print(f"[RESUME] Found checkpoint at round {last_completed}. Resuming from round {start_round}.")
+            model, tokenizer = trainer.load_from_checkpoint(ckpt_path)
+            # reload existing logs
+            filt_log = _load_existing_jsonl(out / "logs" / "filter_log.jsonl")
+            rnd_metrics = _load_existing_jsonl(out / "logs" / "round_metrics.jsonl")
+            sup_rounds = [[]] * start_round
+            # restore drift state
+            drift_data = _load_existing_jsonl(out / "logs" / "drift_log.jsonl")
+            for pt in drift_data:
+                drift.baseline_scores.setdefault(pt["benchmark"], pt["baseline_asr"])
+                drift.history.append(DriftPoint(**{k: pt[k] for k in ("round_idx", "benchmark", "baseline_asr", "current_asr", "absolute_drift", "relative_drift")}))
+    else:
+        start_round = 0
+        model, tokenizer = trainer.load_model_tokenizer()
 
-    for ri in range(cfg.loop.num_self_improve_rounds):
+        # ewc setup if needed
+        if cfg.ewc.enabled:
+            from conti.training.ewc import EWCPenalty
+            ewc = EWCPenalty(model, lambda_ewc=cfg.ewc.lambda_ewc)
+            trainer.set_ewc(ewc)
+
+        # get baseline scores before we touch anything
+        if acc.is_main_process:
+            m = trainer.ensure_model_prepared(model)
+            m.eval()
+            base_metrics = _run_evals(cfg, m, tokenizer, acc.device)
+            drift.set_baseline(_get_asr_scores(base_metrics.get("safety_asr", {})))
+            logger.log_round(-1, {"baseline": base_metrics})
+
+        filt_log: list[dict[str, Any]] = []
+        rnd_metrics: list[dict[str, Any]] = []
+        sup_rounds: list[list[str]] = []
+
+    for ri in range(start_round, cfg.loop.num_self_improve_rounds):
         if cfg.loop.experiment == "baseline_single_sft" and ri > 0:
             break
 
@@ -300,6 +356,13 @@ def run_experiment(cfg: ContiConfig) -> None:
             rnd_metrics.append(ev)
             logger.log_round(ri, ev)
             logger.log_drift(ri, ev.get("drift", {}))
+
+        # flush logs after every round so they survive crashes
+        if acc.is_main_process:
+            _write_jsonl(out / "logs" / "filter_log.jsonl", filt_log)
+            _write_jsonl(out / "logs" / "round_metrics.jsonl", rnd_metrics)
+            drift.save(out / "logs" / "drift_log.jsonl")
+            print(f"[CHECKPOINT] Round {ri} complete. Logs saved.", flush=True)
 
         acc.wait_for_everyone()
 

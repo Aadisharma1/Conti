@@ -11,7 +11,7 @@ model:
   lora_dropout: 0.0
   max_seq_length: 4096
   gradient_checkpointing: false
-  attn_implementation: null  # safe default, no flash-attn needed
+  attn_implementation: sdpa
 
 verifier:
   mode: keyword_and_model
@@ -33,7 +33,7 @@ ewc:
   fisher_samples: 200
 
 logging:
-  use_wandb: false
+  use_wandb: true
   wandb_project: conti-safety
   wandb_entity: null
   log_every_n_steps: 10
@@ -60,5 +60,8 @@ data:
   math_dataset: gsm8k
   math_split: train
   math_test_split: test
-  safety_eval_datasets: []    # GSM8K ONLY — no safety eval on this machine
+  safety_eval_datasets:
+    - advbench_subset
+    - xstest_subset
+    - donotanswer_subset
   max_prompts_per_eval: 9999

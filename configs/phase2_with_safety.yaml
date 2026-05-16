@@ -10,7 +10,7 @@ model:
   lora_alpha: 64
   lora_dropout: 0.0
   max_seq_length: 4096
-  gradient_checkpointing: false
+  gradient_checkpointing: true   # CRITICAL for 152k vocab backward pass
   attn_implementation: sdpa
 
 verifier:
@@ -41,9 +41,9 @@ logging:
 loop:
   experiment: phase2_verifier_buffer
   num_self_improve_rounds: 10
-  generate_batch_size: 64
-  train_micro_batch_size: 16
-  gradient_accumulation_steps: 1
+  generate_batch_size: 8         # conservative for 152k vocab
+  train_micro_batch_size: 2       # 2 * 8 = 16 effective batch
+  gradient_accumulation_steps: 8
   learning_rate: 2.0e-5
   num_epochs_per_round: 1
   max_train_samples_per_round: 2000
